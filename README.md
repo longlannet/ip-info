@@ -1,14 +1,14 @@
 # ip-info
 
-Lightweight IP lookup skill for OpenClaw.
+面向 OpenClaw 的轻量多源 IP 查询 skill。
 
-It checks:
+它可以查询：
 
-- IP geolocation
-- ISP / organization / ASN info
-- domain → IP resolution before lookup
+- IP 地理位置
+- ISP / 组织 / ASN 信息
+- 域名解析后的 IP 信息
 
-The script now uses a small provider architecture with these sources:
+当前脚本使用一套小型 provider 架构，集成了这些来源：
 
 - `ip-api.com`
 - `api.ip.sb`
@@ -16,7 +16,7 @@ The script now uses a small provider architecture with these sources:
 - `api.ipapi.is`
 - `ipinfo.io`
 
-By default it returns the first successful result from the tuned provider order:
+默认会按调优后的顺序返回第一个成功结果：
 
 - `ipwhois`
 - `ipapi-is`
@@ -24,9 +24,9 @@ By default it returns the first successful result from the tuned provider order:
 - `ipinfo`
 - `ip-sb`
 
-`ipinfo.io` works without a token by default. If `IPINFO_TOKEN` is present, the script automatically uses the tokenized path.
+`ipinfo.io` 默认支持无 token 使用；如果检测到 `IPINFO_TOKEN`，脚本会自动切到带 token 的查询路径。
 
-## Files
+## 文件结构
 
 ```text
 ip-info/
@@ -38,18 +38,18 @@ ip-info/
     └── query_ip.py
 ```
 
-## Install
+## 安装
 
-This skill has no pip dependencies.
+这个 skill 没有额外 pip 依赖。
 
 ```bash
 bash scripts/install.sh
 ```
 
-No API key is required for the currently integrated providers.
-If `IPINFO_TOKEN` is set, `ipinfo.io` is automatically upgraded to its tokenized query path.
+当前集成的 provider 默认都不强制要求 API key。  
+如果设置了 `IPINFO_TOKEN`，`ipinfo.io` 会自动升级到 token 模式。
 
-## Quick start
+## 快速开始
 
 ```bash
 python3 scripts/query_ip.py 8.8.8.8
@@ -66,23 +66,20 @@ python3 scripts/query_ip.py 8.8.8.8 --all --summary
 python3 scripts/query_ip.py 8.8.8.8 --all --summary --json
 ```
 
-## Check
+## 校验
 
 ```bash
 bash scripts/check.sh
 ```
 
-This check includes real network smoke tests, not just local syntax validation.
+这个检查会包含真实联网 smoke test，不只是本地语法检查。
 
-## Notes
+## 说明
 
-- No external Python packages are required.
-- The script supports IPv4, IPv6, and normal-domain lookup.
-- `--json` emits normalized structured output.
-- `--provider <name>` forces one provider.
-- `--all` queries all configured providers and returns every successful result.
-- `--raw` emits raw provider payloads.
-- `--summary` emits a consensus / difference summary across providers.
-- summary mode also adds normalized consensus, high-level labels, and a `verdict` / `classification` block.
-- `ipinfo.io` works without a token; if `IPINFO_TOKEN` is present, it is used automatically.
-- `ip-api.com` free endpoint is HTTP-only.
+- 不需要外部 Python 包。
+- 支持 IPv4、IPv6 和普通域名查询。
+- `--provider <name>` 可强制指定单个 provider。
+- `--all` 会查询所有已配置 provider，并返回全部成功结果。
+- `--raw` 输出 provider 原始 payload。
+- `--summary` 会输出多源共识 / 差异汇总，并附带 labels 与 `verdict` / `classification`。
+- `ip-api.com` 免费接口是 HTTP-only。
