@@ -29,7 +29,7 @@ python3 {baseDir}/scripts/query_ip.py "<target>" --all --summary
 - `<target>` can be an IPv4 address like `1.1.1.1`
 - `<target>` can be an IPv6 address like `2606:4700:4700::1111`
 - `<target>` can be a domain like `google.com`
-- `--json` emits normalized structured output
+- `--json` emits normalized structured output, and still returns structured JSON on failure
 - `--raw` emits raw provider payloads
 - `--summary` summarizes provider consensus and differences
 - summary mode also normalizes obvious aliases, emits high-level labels, and produces a `verdict` / `classification` block
@@ -44,3 +44,4 @@ python3 {baseDir}/scripts/query_ip.py "<target>" --all --summary
 - Domain input is resolved with DNS first when possible.
 - `ip-api.com` is used over HTTP because that is how its free endpoint works.
 - If all configured providers fail, the script exits non-zero.
+- With `--json` or `--raw`, failure paths still emit structured JSON error output.

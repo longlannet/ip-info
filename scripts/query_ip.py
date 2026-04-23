@@ -719,6 +719,38 @@ def print_summary(results, target, json_output=False):
             print(f"- {key}: {' | '.join(bits)}")
 
 
+def print_error_result(target, provider_names, attempts=None, query_mode="default", selected_provider=None, json_output=False):
+    payload = {
+        "ok": False,
+        "mode": query_mode,
+        "target": target,
+        "providersTried": provider_names,
+        "error": {
+            "code": "NO_PROVIDER_SUCCESS",
+            "message": "all configured providers failed or the target could not be resolved",
+        },
+    }
+    if selected_provider:
+        payload["provider"] = selected_provider
+    provider_errors = []
+    for attempt in attempts or []:
+        provider_errors.append(
+            {
+                "provider": attempt.get("provider"),
+                "queryValue": attempt.get("queryValue"),
+                "resolvedFrom": attempt.get("resolvedFrom"),
+                "error": attempt.get("error") or "unknown error",
+            }
+        )
+    if provider_errors:
+        payload["error"]["providerErrors"] = provider_errors
+
+    if json_output:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print("❌ 查询失败：所有 provider 均无法访问或解析。")
+
+
 def try_provider(provider_name, query_value, original_target, resolved_from=None):
     fn = PROVIDERS[provider_name]
     try:
@@ -729,11 +761,23 @@ def try_provider(provider_name, query_value, original_target, resolved_from=None
 
 def run_providers(provider_names, query_value, original_target, resolved_from=None):
     results = []
+    attempts = []
     for provider_name in provider_names:
         result = try_provider(provider_name, query_value, original_target, resolved_from=resolved_from)
+        attempt = {
+            "provider": provider_name,
+            "queryValue": query_value,
+            "resolvedFrom": resolved_from,
+        }
         if result.get("ok"):
             results.append(result)
-    return results
+            attempt["ok"] = True
+            attempt["ip"] = result.get("ip")
+        else:
+            attempt["ok"] = False
+            attempt["error"] = result.get("error") or "unknown error"
+        attempts.append(attempt)
+    return results, attempts
 
 
 def query_target(provider_names, original_target):
@@ -748,21 +792,31 @@ def query_target(provider_names, original_target):
     if not candidates:
         return run_providers(provider_names, original_target, original_target)
 
+    all_attempts = []
     for candidate in candidates:
-        results = run_providers(provider_names, candidate["ip"], original_target, resolved_from=original_target)
+        results, attempts = run_providers(provider_names, candidate["ip"], original_target, resolved_from=original_target)
         if results:
-            return results
-    return []
+            return results, attempts
+        all_attempts.extend(attempts)
+    return [], all_attempts
 
 
 def main(argv=None):
     args = parse_args(argv or sys.argv[1:])
     provider_names = [args.provider] if args.provider else list(DEFAULT_PROVIDER_ORDER)
     target = args.target.strip()
-    results = query_target(provider_names, target)
+    results, attempts = query_target(provider_names, target)
+    query_mode = "provider" if args.provider and not args.all else "all" if args.all else "default"
 
     if not results:
-        print("❌ 查询失败：所有 provider 均无法访问或解析。")
+        print_error_result(
+            target,
+            provider_names,
+            attempts=attempts,
+            query_mode=query_mode,
+            selected_provider=args.provider,
+            json_output=(args.json_output or args.raw),
+        )
         return 1
 
     if args.provider and not args.all:

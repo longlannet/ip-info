@@ -82,4 +82,5 @@ bash scripts/check.sh
 - `--all` 会查询所有已配置 provider，并返回全部成功结果。
 - `--raw` 输出 provider 原始 payload。
 - `--summary` 会输出多源共识 / 差异汇总，并附带 labels 与 `verdict` / `classification`。
+- `--json` / `--raw` 在失败路径下也会输出结构化 JSON 错误，便于脚本消费。
 - `ip-api.com` 免费接口是 HTTP-only。

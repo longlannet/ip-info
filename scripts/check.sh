@@ -39,4 +39,18 @@ python3 scripts/query_ip.py 8.8.8.8 --all --summary >/tmp/ip-info-check-summary.
 echo "[ip-info] smoke test: summary single provider"
 python3 scripts/query_ip.py 8.8.8.8 --provider ipinfo --summary --json >/tmp/ip-info-check-summary-single.json
 
+echo "[ip-info] smoke test: structured json error"
+if python3 scripts/query_ip.py not-a-domain.invalid --json >/tmp/ip-info-check-error.json; then
+  echo "[ip-info] expected json error path to exit non-zero" >&2
+  exit 1
+fi
+python3 - <<'PY'
+import json
+with open('/tmp/ip-info-check-error.json', 'r', encoding='utf-8') as f:
+    data = json.load(f)
+assert data['ok'] is False
+assert data['error']['code'] == 'NO_PROVIDER_SUCCESS'
+assert isinstance(data['error'].get('providerErrors'), list) and data['error']['providerErrors']
+PY
+
 echo "[ip-info] check complete"
