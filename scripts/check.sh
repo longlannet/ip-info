@@ -49,8 +49,70 @@ import json
 with open('/tmp/ip-info-check-error.json', 'r', encoding='utf-8') as f:
     data = json.load(f)
 assert data['ok'] is False
-assert data['error']['code'] == 'NO_PROVIDER_SUCCESS'
+assert data['error']['code'] == 'DOMAIN_UNRESOLVED'
+assert data['resolution']['inputKind'] == 'domain'
+assert data['resolution']['dnsResolved'] is False
 assert isinstance(data['error'].get('providerErrors'), list) and data['error']['providerErrors']
+PY
+
+echo "[ip-info] smoke test: invalid target format json error"
+if python3 scripts/query_ip.py 'https://example.com' --provider ip-api --json >/tmp/ip-info-check-invalid-format.json; then
+  echo "[ip-info] expected invalid-format path to exit non-zero" >&2
+  exit 1
+fi
+python3 - <<'PY'
+import json
+with open('/tmp/ip-info-check-invalid-format.json', 'r', encoding='utf-8') as f:
+    data = json.load(f)
+assert data['ok'] is False
+assert data['error']['code'] == 'TARGET_INVALID_FORMAT'
+assert data['resolution']['invalidFormat'] is True
+assert data['provider'] == 'ip-api'
+PY
+
+echo "[ip-info] smoke test: provider-scoped json error"
+if python3 scripts/query_ip.py not-a-domain.invalid --provider ip-api --json >/tmp/ip-info-check-provider-error.json; then
+  echo "[ip-info] expected provider-scoped error path to exit non-zero" >&2
+  exit 1
+fi
+python3 - <<'PY'
+import json
+with open('/tmp/ip-info-check-provider-error.json', 'r', encoding='utf-8') as f:
+    data = json.load(f)
+assert data['ok'] is False
+assert data['provider'] == 'ip-api'
+assert data['error']['code'] == 'DOMAIN_UNRESOLVED'
+assert len(data['error'].get('providerErrors', [])) == 1
+PY
+
+echo "[ip-info] smoke test: synthetic error classifier"
+python3 - <<'PY'
+import importlib.util
+spec = importlib.util.spec_from_file_location('query_ip', 'scripts/query_ip.py')
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+payload = mod.build_error_payload(
+    'example.com',
+    ['ipwhois', 'ip-api'],
+    attempts=[
+        {'provider': 'ipwhois', 'ok': False, 'errorCode': 'TIMEOUT', 'error': 'timeout', 'transient': True},
+        {'provider': 'ip-api', 'ok': False, 'errorCode': 'RATE_LIMITED', 'error': 'rate limited', 'transient': True},
+    ],
+    resolution={'inputKind': 'domain', 'dnsResolved': True, 'resolvedCandidates': ['1.1.1.1'], 'invalidFormat': False},
+)
+assert payload['error']['code'] == 'UPSTREAM_UNAVAILABLE'
+
+payload = mod.build_error_payload(
+    'example.com',
+    ['ipwhois', 'ip-api'],
+    attempts=[
+        {'provider': 'ipwhois', 'ok': False, 'errorCode': 'TIMEOUT', 'error': 'timeout', 'transient': True},
+        {'provider': 'ip-api', 'ok': False, 'errorCode': 'INVALID_QUERY', 'error': 'invalid query', 'transient': False},
+    ],
+    resolution={'inputKind': 'domain', 'dnsResolved': True, 'resolvedCandidates': ['1.1.1.1'], 'invalidFormat': False},
+)
+assert payload['error']['code'] == 'NO_PROVIDER_SUCCESS'
 PY
 
 echo "[ip-info] check complete"

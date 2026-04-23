@@ -83,4 +83,5 @@ bash scripts/check.sh
 - `--raw` 输出 provider 原始 payload。
 - `--summary` 会输出多源共识 / 差异汇总，并附带 labels 与 `verdict` / `classification`。
 - `--json` / `--raw` 在失败路径下也会输出结构化 JSON 错误，便于脚本消费。
+- 常见失败码包括：`TARGET_INVALID_FORMAT`、`DOMAIN_UNRESOLVED`、`TARGET_INVALID_OR_UNRESOLVED`、`UPSTREAM_UNAVAILABLE`、`NO_PROVIDER_SUCCESS`。
 - `ip-api.com` 免费接口是 HTTP-only。

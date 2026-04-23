@@ -7,6 +7,7 @@ import re
 import socket
 import ssl
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -80,6 +81,138 @@ def parse_loc(value):
         return None, None
     lat, lon = value.split(",", 1)
     return lat, lon
+
+
+def is_obviously_invalid_target_format(target):
+    if not isinstance(target, str):
+        return False
+    text = target.strip()
+    if not text:
+        return False
+    if "://" in text:
+        return True
+    if "/" in text:
+        return True
+    if re.search(r"\s", text):
+        return True
+    return False
+
+
+def classify_exception(exc):
+    if isinstance(exc, urllib.error.HTTPError):
+        status = getattr(exc, "code", None)
+        if status == 400:
+            return {"code": "BAD_REQUEST", "message": f"HTTP Error {status}: Bad Request", "transient": False}
+        if status == 404:
+            return {"code": "NOT_FOUND", "message": f"HTTP Error {status}: Not Found", "transient": False}
+        if status == 429:
+            return {"code": "RATE_LIMITED", "message": f"HTTP Error {status}: Too Many Requests", "transient": True}
+        if isinstance(status, int) and status >= 500:
+            return {"code": f"HTTP_{status}", "message": str(exc), "transient": True}
+        return {"code": f"HTTP_{status or 'ERROR'}", "message": str(exc), "transient": False}
+
+    if isinstance(exc, urllib.error.URLError):
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, socket.gaierror):
+            return {"code": "DNS_FAILURE", "message": str(exc), "transient": False}
+        if isinstance(reason, (socket.timeout, TimeoutError)):
+            return {"code": "TIMEOUT", "message": str(exc), "transient": True}
+        if isinstance(reason, ssl.SSLError):
+            return {"code": "SSL_ERROR", "message": str(exc), "transient": True}
+        return {"code": "CONNECTION_ERROR", "message": str(exc), "transient": True}
+
+    if isinstance(exc, (socket.timeout, TimeoutError)):
+        return {"code": "TIMEOUT", "message": str(exc), "transient": True}
+
+    if isinstance(exc, socket.gaierror):
+        return {"code": "DNS_FAILURE", "message": str(exc), "transient": False}
+
+    if isinstance(exc, ssl.SSLError):
+        return {"code": "SSL_ERROR", "message": str(exc), "transient": True}
+
+    if isinstance(exc, json.JSONDecodeError):
+        return {"code": "INVALID_JSON", "message": str(exc), "transient": True}
+
+    message = str(exc).strip() or exc.__class__.__name__
+    lower = message.lower()
+    if "invalid query" in lower or "bad request" in lower:
+        return {"code": "INVALID_QUERY", "message": message, "transient": False}
+    if "not found" in lower:
+        return {"code": "NOT_FOUND", "message": message, "transient": False}
+    if "timed out" in lower or "timeout" in lower:
+        return {"code": "TIMEOUT", "message": message, "transient": True}
+    if "temporarily unavailable" in lower or "connection reset" in lower:
+        return {"code": "UPSTREAM_UNAVAILABLE", "message": message, "transient": True}
+    return {"code": "QUERY_FAILED", "message": message, "transient": False}
+
+
+def infer_error_code(target, attempts, resolution):
+    invalid_like_codes = {"DNS_FAILURE", "NOT_FOUND", "INVALID_QUERY", "BAD_REQUEST"}
+    codes = [attempt.get("errorCode") for attempt in attempts or [] if attempt.get("ok") is False and attempt.get("errorCode")]
+    if resolution.get("invalidFormat"):
+        return "TARGET_INVALID_FORMAT"
+    if resolution.get("inputKind") == "domain" and resolution.get("dnsResolved") is False and codes and all(code in invalid_like_codes for code in codes):
+        return "DOMAIN_UNRESOLVED"
+    if codes and all(code in invalid_like_codes for code in codes):
+        return "TARGET_INVALID_OR_UNRESOLVED"
+    transient_flags = [bool(attempt.get("transient")) for attempt in attempts or [] if attempt.get("ok") is False]
+    if transient_flags and all(transient_flags):
+        return "UPSTREAM_UNAVAILABLE"
+    return "NO_PROVIDER_SUCCESS"
+
+
+def infer_error_message(error_code, target, resolution):
+    messages = {
+        "TARGET_INVALID_FORMAT": f"target format is invalid for raw IP/domain lookup: {target}",
+        "DOMAIN_UNRESOLVED": "domain could not be resolved and no provider returned a valid result",
+        "TARGET_INVALID_OR_UNRESOLVED": "target appears invalid or could not be resolved by any provider",
+        "UPSTREAM_UNAVAILABLE": "all configured providers failed due to upstream or network issues",
+        "NO_PROVIDER_SUCCESS": "all configured providers failed or the target could not be resolved",
+    }
+    message = messages.get(error_code, messages["NO_PROVIDER_SUCCESS"])
+    if error_code == "DOMAIN_UNRESOLVED" and resolution.get("dnsResolved") is False:
+        return f"{message} (local DNS returned no records)"
+    return message
+
+
+def build_error_payload(target, provider_names, attempts=None, query_mode="default", selected_provider=None, resolution=None):
+    resolution = resolution or {}
+    error_code = infer_error_code(target, attempts, resolution)
+    payload = {
+        "ok": False,
+        "mode": query_mode,
+        "target": target,
+        "providersTried": provider_names,
+        "resolution": {
+            "inputKind": resolution.get("inputKind") or "unknown",
+            "dnsResolved": resolution.get("dnsResolved"),
+            "resolvedCandidates": resolution.get("resolvedCandidates") or [],
+            "invalidFormat": bool(resolution.get("invalidFormat")),
+        },
+        "error": {
+            "code": error_code,
+            "message": infer_error_message(error_code, target, resolution),
+        },
+    }
+    if selected_provider:
+        payload["provider"] = selected_provider
+    provider_errors = []
+    for attempt in attempts or []:
+        if attempt.get("ok") is True:
+            continue
+        provider_errors.append(
+            {
+                "provider": attempt.get("provider"),
+                "queryValue": attempt.get("queryValue"),
+                "resolvedFrom": attempt.get("resolvedFrom"),
+                "errorCode": attempt.get("errorCode") or "QUERY_FAILED",
+                "error": attempt.get("error") or "unknown error",
+                "transient": bool(attempt.get("transient")),
+            }
+        )
+    if provider_errors:
+        payload["error"]["providerErrors"] = provider_errors
+    return payload
 
 
 def normalize_common(*, provider, source_label, original_target, query_value, resolved_from, ip, country, region, city, org, isp, asn, hostname, lat, lon, loc, raw, extra=None):
@@ -719,36 +852,20 @@ def print_summary(results, target, json_output=False):
             print(f"- {key}: {' | '.join(bits)}")
 
 
-def print_error_result(target, provider_names, attempts=None, query_mode="default", selected_provider=None, json_output=False):
-    payload = {
-        "ok": False,
-        "mode": query_mode,
-        "target": target,
-        "providersTried": provider_names,
-        "error": {
-            "code": "NO_PROVIDER_SUCCESS",
-            "message": "all configured providers failed or the target could not be resolved",
-        },
-    }
-    if selected_provider:
-        payload["provider"] = selected_provider
-    provider_errors = []
-    for attempt in attempts or []:
-        provider_errors.append(
-            {
-                "provider": attempt.get("provider"),
-                "queryValue": attempt.get("queryValue"),
-                "resolvedFrom": attempt.get("resolvedFrom"),
-                "error": attempt.get("error") or "unknown error",
-            }
-        )
-    if provider_errors:
-        payload["error"]["providerErrors"] = provider_errors
+def print_error_result(target, provider_names, attempts=None, query_mode="default", selected_provider=None, resolution=None, json_output=False):
+    payload = build_error_payload(
+        target,
+        provider_names,
+        attempts=attempts,
+        query_mode=query_mode,
+        selected_provider=selected_provider,
+        resolution=resolution,
+    )
 
     if json_output:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
-        print("❌ 查询失败：所有 provider 均无法访问或解析。")
+        print(f"❌ 查询失败：{payload['error']['message']}。")
 
 
 def try_provider(provider_name, query_value, original_target, resolved_from=None):
@@ -756,7 +873,14 @@ def try_provider(provider_name, query_value, original_target, resolved_from=None
     try:
         return fn(query_value, original_target, resolved_from=resolved_from)
     except Exception as e:
-        return {"ok": False, "provider": provider_name, "error": str(e)}
+        error_info = classify_exception(e)
+        return {
+            "ok": False,
+            "provider": provider_name,
+            "error": error_info["message"],
+            "errorCode": error_info["code"],
+            "transient": error_info["transient"],
+        }
 
 
 def run_providers(provider_names, query_value, original_target, resolved_from=None):
@@ -776,36 +900,55 @@ def run_providers(provider_names, query_value, original_target, resolved_from=No
         else:
             attempt["ok"] = False
             attempt["error"] = result.get("error") or "unknown error"
+            attempt["errorCode"] = result.get("errorCode") or "QUERY_FAILED"
+            attempt["transient"] = bool(result.get("transient"))
         attempts.append(attempt)
     return results, attempts
 
 
 def query_target(provider_names, original_target):
+    resolution = {
+        "inputKind": "empty" if not original_target else "unknown",
+        "dnsResolved": None,
+        "resolvedCandidates": [],
+        "invalidFormat": False,
+    }
     if not original_target:
-        return run_providers(provider_names, "", original_target)
+        results, attempts = run_providers(provider_names, "", original_target)
+        return results, attempts, resolution
 
     parsed_ip = is_ip_address(original_target)
     if parsed_ip is not None:
-        return run_providers(provider_names, str(parsed_ip), original_target)
+        resolution["inputKind"] = "ip"
+        results, attempts = run_providers(provider_names, str(parsed_ip), original_target)
+        return results, attempts, resolution
+
+    resolution["inputKind"] = "domain"
+    resolution["invalidFormat"] = is_obviously_invalid_target_format(original_target)
 
     candidates = resolve_domain(original_target)
     if not candidates:
-        return run_providers(provider_names, original_target, original_target)
+        resolution["dnsResolved"] = False
+        results, attempts = run_providers(provider_names, original_target, original_target)
+        return results, attempts, resolution
+
+    resolution["dnsResolved"] = True
+    resolution["resolvedCandidates"] = [candidate["ip"] for candidate in candidates]
 
     all_attempts = []
     for candidate in candidates:
         results, attempts = run_providers(provider_names, candidate["ip"], original_target, resolved_from=original_target)
         if results:
-            return results, attempts
+            return results, attempts, resolution
         all_attempts.extend(attempts)
-    return [], all_attempts
+    return [], all_attempts, resolution
 
 
 def main(argv=None):
     args = parse_args(argv or sys.argv[1:])
     provider_names = [args.provider] if args.provider else list(DEFAULT_PROVIDER_ORDER)
     target = args.target.strip()
-    results, attempts = query_target(provider_names, target)
+    results, attempts, resolution = query_target(provider_names, target)
     query_mode = "provider" if args.provider and not args.all else "all" if args.all else "default"
 
     if not results:
@@ -815,6 +958,7 @@ def main(argv=None):
             attempts=attempts,
             query_mode=query_mode,
             selected_provider=args.provider,
+            resolution=resolution,
             json_output=(args.json_output or args.raw),
         )
         return 1

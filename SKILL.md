@@ -33,6 +33,7 @@ python3 {baseDir}/scripts/query_ip.py "<target>" --all --summary
 - `--raw` emits raw provider payloads
 - `--summary` summarizes provider consensus and differences
 - summary mode also normalizes obvious aliases, emits high-level labels, and produces a `verdict` / `classification` block
+- common structured failure codes include `TARGET_INVALID_FORMAT`, `DOMAIN_UNRESOLVED`, `TARGET_INVALID_OR_UNRESOLVED`, `UPSTREAM_UNAVAILABLE`, and fallback `NO_PROVIDER_SUCCESS`
 - `--provider` forces one provider from `ip-api`, `ip-sb`, `ipwhois`, `ipapi-is`, `ipinfo`
 - `--all` queries all configured providers and returns all successful results
 - default provider order is tuned as `ipwhois` → `ipapi-is` → `ip-api` → `ipinfo` → `ip-sb`
@@ -45,3 +46,4 @@ python3 {baseDir}/scripts/query_ip.py "<target>" --all --summary
 - `ip-api.com` is used over HTTP because that is how its free endpoint works.
 - If all configured providers fail, the script exits non-zero.
 - With `--json` or `--raw`, failure paths still emit structured JSON error output.
+- failure JSON also includes `resolution` metadata and per-provider `errorCode` details.
